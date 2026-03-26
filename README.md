@@ -11,7 +11,7 @@
 | **1주차** | 컨테이너 기술의 이해 |
 | **2주차** | [도커 이미지와 컨테이너](./Week2/DockerImageContainer.md) |
 | **3주차** | [도커 이미지 빌드](./Week3/DockerImageBuild.md) |
-| **4주차** | [도커 네트워크/볼륨](./Week3/DockerNetworkVolume.md) |
+| **4주차** | [도커 네트워크/볼륨](./Week4/DockerNetworkVolume.md) |
 | **5주차** | 멀티 컨테이너 운용 (도커 컴포즈) |
 | **6주차** | 멀티 컨테이너 운용 (도커 스웜 |
 | **7주차** | 멀티 컨테이너 운용 |
