@@ -216,7 +216,12 @@ kubectl -n bookinfo logs deploy/reviews-v2 -c istio-proxy 2>/dev/null | grep -c 
 
 ## Step 6. 트래픽 관리 ② — 헤더 기반 A/B 테스트 (PDF 18쪽)
 
-특정 사용자(`end-user: tester`)는 v3 로, 나머지는 v1 으로 라우팅 — PDF p.18 그대로.
+특정 사용자는 v3 로, 나머지는 v1 으로 라우팅합니다.
+
+> ⚠️ **PDF p.18 과의 차이 — 매칭값은 `jason`**
+> PDF 는 `exact: tester` 를 예시로 쓰지만, **bookinfo 의 productpage 앱이 외부 HTTP 헤더를 reviews 로 전파하지 않습니다.** 대신 productpage 에 **`jason` 으로 로그인** 하면 productpage 가 자동으로 `end-user: jason` 헤더를 reviews 호출에 추가합니다. 그래서 본 실습은 매칭값을 `jason` 으로 변경합니다.
+
+### 1. VirtualService 작성 (`jason` 매칭)
 
 ```bash
 cat > reviews-ab.yaml << 'EOF'
@@ -231,41 +236,64 @@ spec:
     - match:
         - headers:
             end-user:
-              exact: tester
+              exact: jason         # bookinfo 로그인 username 과 동일해야 매칭됨
       route:
-        - destination: { host: reviews, subset: v3 }   # 테스터는 v3 (별점 빨간색)
+        - destination: { host: reviews, subset: v3 }   # jason 은 v3 (별점 빨간색)
     - route:
         - destination: { host: reviews, subset: v1 }   # 그 외는 v1 (별점 없음)
 EOF
 
 kubectl apply -f reviews-ab.yaml
+sleep 3
 ```
 ![figure6-1](./images/figure6-1.png)
 
-### 검증 — 헤더 유무에 따라 reviews v1/v3 의 access log 가 갈림
+### 2. jason 으로 로그인해서 cookie 받기
 
 ```bash
-# 1) 일반 요청 10번 — reviews-v1 으로만 가야 함
+# bookinfo 의 /login 으로 POST → session cookie 발급
+COOKIE=$(curl -s -c - -X POST -F "username=jason" -F "passwd=" \
+  "http://$NODE_IP:$NODE_PORT/login" | grep -E 'session\s' | awk '{print $6"="$7}')
+echo "Cookie: $COOKIE"
+# 예상 출력: session=eyJ1c2VyIjoiamFzb24ifQ.xxx
+```
+![figure6-2](./images/figure6-2.png)
+
+### 3. 로그 초기화 후 트래픽 분리 발생
+
+```bash
+# (선택) Step 5 의 누적 로그가 신경 쓰이면 reviews 파드만 재시작
+kubectl -n bookinfo rollout restart deploy/reviews-v1 deploy/reviews-v3
+kubectl -n bookinfo rollout status deploy/reviews-v1 --timeout=60s
+kubectl -n bookinfo rollout status deploy/reviews-v3 --timeout=60s
+
+# 일반 요청 10번 (cookie 없음) — v1 으로 가야 함
 for i in $(seq 1 10); do
   curl -s -o /dev/null "http://$NODE_IP:$NODE_PORT/productpage"
 done
 
-# 2) tester 헤더로 10번 — reviews-v3 으로만 가야 함
+# jason cookie 로 10번 — v3 으로 가야 함
 for i in $(seq 1 10); do
-  curl -s -o /dev/null -H "end-user: tester" "http://$NODE_IP:$NODE_PORT/productpage"
+  curl -s -o /dev/null --cookie "$COOKIE" "http://$NODE_IP:$NODE_PORT/productpage"
 done
-
-# 3) 각 버전의 access log 카운트 비교
-echo "=== reviews-v1 (일반 사용자용) ==="
-kubectl -n bookinfo logs deploy/reviews-v1 -c istio-proxy --tail=200 2>/dev/null | grep -c '"GET'
-
-echo "=== reviews-v3 (tester 헤더 전용) ==="
-kubectl -n bookinfo logs deploy/reviews-v3 -c istio-proxy --tail=200 2>/dev/null | grep -c '"GET'
-
-echo "=== reviews-v2 (이 단계에선 안 호출됨, 0이 정상) ==="
-kubectl -n bookinfo logs deploy/reviews-v2 -c istio-proxy --tail=200 2>/dev/null | grep -c '"GET'
 ```
-![figure6-2](./images/figure6-2.png)
+
+### 4. inbound 트래픽만 카운트 — `"GET /reviews/` 패턴
+
+```bash
+# istio-proxy 의 access log 는 inbound + outbound 둘 다 잡으므로
+# reviews 의 inbound path 인 '/reviews/<id>' 만 grep 해야 정확함
+for V in v1 v2 v3; do
+  COUNT=$(kubectl -n bookinfo logs deploy/reviews-$V -c istio-proxy 2>/dev/null | grep -c '"GET /reviews/')
+  echo "reviews-$V (inbound only): $COUNT"
+done
+```
+
+**기대 결과**: `reviews-v1 ≈ 10`, `reviews-v2 = 0`, `reviews-v3 ≈ 10`
+
+![figure6-3](./images/figure6-3.png)
+
+> **브라우저로 더 직관적으로 보기**: `http://<NODE_IP>:<NODE_PORT>/productpage` 접속 → 별점 없음(v1). 우상단 **Sign in** → username `jason`, password 공란 → 새로고침하면 별점이 **빨간색**(v3) 으로 바뀝니다.
 
 ---
 
@@ -716,3 +744,6 @@ kubectl delete -f ~/k8s-week12/istio-1.23.2/samples/addons/ --ignore-not-found
 | 사이드카 주입 후 파드가 CrashLoopBackOff | 노드의 CPU/메모리 압박 / `kubectl describe pod` 에서 OOM 또는 init 컨테이너 실패 확인 |
 | Step 13 의 Linkerd/Consul YAML 을 그대로 apply | Istio CRD 와 다른 그룹이라 apply 자체는 가능하지만 동작 X — **CRD 미설치 상태**라 처음에 NotFound 에러로 안전 차단 |
 | 새 SSH 세션에서 `istioctl: command not found` | `export PATH=$PATH` 가 세션에 종속됨 — 영구화하려면 `echo 'export PATH=~/k8s-week12/istio-1.23.2/bin:$PATH' >> ~/.bashrc && source ~/.bashrc` |
+| Step 6 의 A/B 라우팅에서 v3 카운트가 0 | **bookinfo productpage 는 외부 헤더를 reviews 로 전파 안 함** — `curl -H "end-user: jason"` 대신 `/login` 으로 cookie 받아 호출하거나 브라우저에서 `jason` 로그인 |
+| reviews 카운트가 예상보다 훨씬 큼 (예: v1=53) | istio-proxy 의 access log 는 **inbound + outbound 둘 다 잡음** — `grep -c '"GET /reviews/'` 처럼 inbound path 만 grep 해야 정확 |
+| productpage 컨테이너에서 `curl: not found` | bookinfo 이미지에 curl 미포함 — 외부 NodeIP 로 호출하거나 `kubectl run --image=curlimages/curl` 로 별도 파드 사용 |
