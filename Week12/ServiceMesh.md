@@ -411,14 +411,16 @@ kubectl apply -f strict-mtls.yaml
 ### 3. 검증 — 사이드카 없는 외부 파드에서 호출 시 실패
 
 ```bash
-# default NS 에 사이드카 없는 파드 띄우기 (이 NS 에는 istio-injection 라벨이 없음)
-kubectl run tmp-curl --image=curlimages/curl --restart=Never --rm -it -- \
+# [Case 1] default NS 의 사이드카 없는 파드 → STRICT 가 차단해야 함
+kubectl run tmp-curl --image=curlimages/curl --restart=Never --rm -i -- \
   sh -c "curl -sS --max-time 5 -o /dev/null -w 'HTTP %{http_code}\n' http://productpage.bookinfo.svc.cluster.local:9080/productpage; echo done"
-# HTTP 000 / connection reset — 사이드카 없는 클라이언트는 mTLS 핸드셰이크 못 함 (최대 5초 후 종료)
+# 기대: 'Connection reset by peer' + HTTP 000 — TLS 핸드셰이크 실패 (정상)
 
-# 반대로 bookinfo NS 안에서는 정상
-kubectl exec -n bookinfo $SRC_POD -c productpage -- \
-  curl -sS --max-time 5 -o /dev/null -w "HTTP %{http_code}\n" http://reviews:9080/reviews/0
+# [Case 2] bookinfo NS 의 사이드카 자동 주입된 파드 → mTLS 정상 통신
+# (productpage 컨테이너에는 curl 이 없으므로 별도 디버그 파드 사용)
+kubectl run debug-in --image=curlimages/curl -n bookinfo --restart=Never --rm -i -- \
+  sh -c "curl -sS --max-time 5 -o /dev/null -w 'HTTP %{http_code}\n' http://reviews:9080/reviews/0; echo done"
+# 기대: HTTP 200 — bookinfo NS 의 istio-injection=enabled 덕분에 사이드카 자동 주입 → mTLS OK
 ```
 ![figure9-3](./images/figure9-3.png)
 
