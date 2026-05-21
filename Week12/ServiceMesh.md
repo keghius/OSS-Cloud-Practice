@@ -364,7 +364,13 @@ spec:
 EOF
 
 kubectl apply -f reviews-circuit-breaker.yaml
-kubectl -n bookinfo describe destinationrule reviews | grep -A4 OutlierDetection
+
+# 설정 검증 — `kubectl describe` 는 nested 필드를 누락하므로 jsonpath 로 직접 추출
+echo "--- outlierDetection ---"
+kubectl -n bookinfo get destinationrule reviews -o jsonpath='{.spec.trafficPolicy.outlierDetection}{"\n"}'
+
+echo "--- connectionPool ---"
+kubectl -n bookinfo get destinationrule reviews -o jsonpath='{.spec.trafficPolicy.connectionPool}{"\n"}'
 ```
 ![figure8-1](./images/figure8-1.png)
 
@@ -747,3 +753,4 @@ kubectl delete -f ~/k8s-week12/istio-1.23.2/samples/addons/ --ignore-not-found
 | Step 6 의 A/B 라우팅에서 v3 카운트가 0 | **bookinfo productpage 는 외부 헤더를 reviews 로 전파 안 함** — `curl -H "end-user: jason"` 대신 `/login` 으로 cookie 받아 호출하거나 브라우저에서 `jason` 로그인 |
 | reviews 카운트가 예상보다 훨씬 큼 (예: v1=53) | istio-proxy 의 access log 는 **inbound + outbound 둘 다 잡음** — `grep -c '"GET /reviews/'` 처럼 inbound path 만 grep 해야 정확 |
 | productpage 컨테이너에서 `curl: not found` | bookinfo 이미지에 curl 미포함 — 외부 NodeIP 로 호출하거나 `kubectl run --image=curlimages/curl` 로 별도 파드 사용 |
+| `kubectl describe destinationrule \| grep OutlierDetection` 결과가 빈 줄 | `describe` 가 Istio CRD 의 nested 필드를 누락 + 대소문자 차이 — `kubectl get dr -o jsonpath='{.spec.trafficPolicy.outlierDetection}'` 로 직접 추출 |
