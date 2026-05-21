@@ -418,6 +418,9 @@ kubectl run tmp-curl --image=curlimages/curl --restart=Never --rm -i -- \
 
 # [Case 2] bookinfo NS 의 사이드카 자동 주입된 파드 → mTLS 정상 통신
 # (productpage 컨테이너에는 curl 이 없으므로 별도 디버그 파드 사용)
+# 이전 실행 잔재가 있으면 AlreadyExists 에러가 나므로 안전망으로 사전 삭제
+kubectl -n bookinfo delete pod debug-in --ignore-not-found
+
 kubectl run debug-in --image=curlimages/curl -n bookinfo --restart=Never --rm -i -- \
   sh -c "curl -sS --max-time 5 -o /dev/null -w 'HTTP %{http_code}\n' http://reviews:9080/reviews/0; echo done"
 # 기대: HTTP 200 — bookinfo NS 의 istio-injection=enabled 덕분에 사이드카 자동 주입 → mTLS OK
