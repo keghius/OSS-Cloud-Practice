@@ -416,18 +416,20 @@ kubectl run tmp-curl --image=curlimages/curl --restart=Never --rm -i -- \
   sh -c "curl -sS --max-time 5 -o /dev/null -w 'HTTP %{http_code}\n' http://productpage.bookinfo.svc.cluster.local:9080/productpage; echo done"
 # 기대: 'Connection reset by peer' + HTTP 000 — TLS 핸드셰이크 실패 (정상)
 
-# [Case 2] bookinfo NS 의 사이드카 자동 주입된 파드 → mTLS 정상 통신
-# (productpage 컨테이너에는 curl 이 없으므로 별도 디버그 파드 사용)
-# 이전 실행 잔재가 있으면 AlreadyExists 에러가 나므로 안전망으로 사전 삭제
-kubectl -n bookinfo delete pod debug-in --grace-period=0 --force --ignore-not-found 2>/dev/null
+# [Case 2] 이미 작동 중인 bookinfo 내부 통신으로 mTLS 정상 동작 확인
+# (이게 가장 신뢰할 수 있는 검증 — productpage → reviews/details/ratings 호출이
+#  STRICT 모드에서도 200 이면 내부 mTLS 가 완벽히 작동하고 있다는 증거)
+curl -s -o /dev/null -w "productpage: HTTP %{http_code}\n" "http://$NODE_IP:$NODE_PORT/productpage"
+# 기대: productpage: HTTP 200 — Ingress Gateway → productpage 사이드카 → reviews 사이드카 → ... 모두 mTLS 로 흐름
 
-# 핵심 — curl 후 Envoy 사이드카를 /quitquitquit 으로 명시 종료해야 --rm 이 작동함
-# (사이드카가 백그라운드 영구 실행이라 종료 신호를 주지 않으면 파드가 안 끝남)
-kubectl run debug-in --image=curlimages/curl -n bookinfo --restart=Never --rm -i -- \
-  sh -c "curl -sS --max-time 5 -o /dev/null -w 'HTTP %{http_code}\n' http://reviews:9080/reviews/0; \
-         echo done; \
-         curl -sS -X POST http://localhost:15020/quitquitquit >/dev/null 2>&1 || true"
-# 기대: HTTP 200 — bookinfo NS 의 istio-injection=enabled 덕분에 사이드카 자동 주입 → mTLS OK
+# (참고) 별도 디버그 파드로 시연하고 싶다면 다음 패턴 사용 — 단, 사이드카 자동 주입 시
+# kubectl run --rm 이 사이드카 영구 실행으로 무한 대기/timed out 될 수 있음. logs 로 결과 확인 후 명시 삭제 권장.
+#
+# kubectl run debug-in --image=curlimages/curl -n bookinfo --restart=Never -- \
+#   sh -c "curl -sS --max-time 5 -o /dev/null -w 'HTTP %{http_code}\n' http://reviews:9080/reviews/0; echo done"
+# kubectl -n bookinfo wait --for=condition=Ready pod/debug-in --timeout=60s
+# sleep 3 && kubectl -n bookinfo logs debug-in -c debug-in
+# kubectl -n bookinfo delete pod debug-in --grace-period=0 --force --ignore-not-found
 ```
 ![figure9-3](./images/figure9-3.png)
 
