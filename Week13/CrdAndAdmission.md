@@ -609,8 +609,7 @@ EOF
 ```bash
 # 별도 터미널 — kopf 가 self-signed cert 생성 + ValidatingWebhookConfiguration 자동 등록
 source venv/bin/activate     # 새 터미널이면 venv 활성화 필요
-kopf run --namespace=crd-lab --standalone --liveness=http://0.0.0.0:8080/healthz \
-  --verbose validating_webhook.py
+kopf run --namespace=crd-lab --standalone --verbose validating_webhook.py
 ```
 
 > `kopf` 는 자체 인증서를 생성하고 ValidatingWebhookConfiguration 까지 자동 등록합니다. 학생 환경에서 cert-manager 없이도 즉시 동작.
@@ -729,6 +728,7 @@ deactivate 2>/dev/null
 | `kopf run` 이 `Unauthorized` | `~/.kube/config` 의 사용자가 CRD/리소스에 권한 없음 — `kubectl auth can-i create websites` 로 확인 |
 | Webhook 이 호출 안 됨 | `kopf` 는 자동으로 etcd 등록 + cert 생성 — `kubectl get validatingwebhookconfigurations` 로 등록 여부 확인 |
 | `Admission handlers exist, but no admission server/tunnel is configured` | kopf 1.44+ 부터 `@kopf.on.startup()` 에서 `settings.admission.server = kopf.WebhookAutoServer(port=9443)` + `settings.admission.managed = 'auto.kopf.dev'` 명시 필수 |
+| `[Errno 98] address already in use ('0.0.0.0', 8080)` | `--liveness` 옵션의 8080 포트가 점유 중 — 옵션 빼고 실행하거나 `--liveness=http://0.0.0.0:18080/healthz` 같이 다른 포트로 |
 | Webhook 거부했는데 Pod 가 생성됨 | `failurePolicy: Ignore` 또는 webhook server 다운 — `kopf run` 출력 확인 |
 | `kopf: command not found` | venv 활성화 필요 — `source ~/k8s-week13/venv/bin/activate` |
 | `ImportError: kubernetes` | `pip install kubernetes` 후에도 안 되면 venv 안에서 설치됐는지 확인 |
