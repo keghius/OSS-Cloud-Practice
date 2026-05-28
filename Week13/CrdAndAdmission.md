@@ -28,8 +28,6 @@ python3 -m venv ~/k8s-week13/venv
 source ~/k8s-week13/venv/bin/activate
 pip install --upgrade pip
 pip install "kopf>=1.37" "kubernetes>=29" pyyaml
-# certvalidator: kopf 의 WebhookAutoServer 가 host 자동 감지에 필요 (Step 10/11 admission webhook)
-pip install certvalidator
 
 # 설치 확인
 kopf --version
@@ -579,14 +577,28 @@ kubectl -n tmp-ns run blocked --image=nginx 2>&1 | tail -3
 ```bash
 cat > validating_webhook.py << 'EOF'
 import kopf
+import socket
 
 ALLOWED_PREFIXES = ("nginx:", "docker.io/", "registry.k8s.io/")
+
+def _detect_host():
+    """master 노드의 outbound IP 자동 감지 (kubectl 가 API Server 호출하는 IP 와 동일)"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("10.255.255.255", 1))
+        return s.getsockname()[0]
+    finally:
+        s.close()
 
 # kopf 1.44+ 부터 admission server 명시 설정 필수
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_):
-    # WebhookAutoServer 가 self-signed cert + master IP 자동 감지
-    settings.admission.server = kopf.WebhookAutoServer(port=9443)
+    # WebhookServer (host 명시) → certvalidator/oscrypto 의존성 우회
+    # Ubuntu 24.04 의 OpenSSL 3.x 와 oscrypto 가 호환 안 되어 WebhookAutoServer 가 실패
+    settings.admission.server = kopf.WebhookServer(
+        port=9443,
+        host=_detect_host(),
+    )
     # ValidatingWebhookConfiguration 자동 등록·관리
     settings.admission.managed = 'auto.kopf.dev'
 
@@ -651,12 +663,21 @@ EOF
 # (Step 10 의 kopf 가 실행 중이라면 중단 후 다시 실행 — 두 핸들러 합쳐서)
 cat > webhooks_combined.py << 'EOF'
 import kopf
+import socket
 
 ALLOWED_PREFIXES = ("nginx:", "docker.io/", "registry.k8s.io/")
 
+def _detect_host():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("10.255.255.255", 1))
+        return s.getsockname()[0]
+    finally:
+        s.close()
+
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_):
-    settings.admission.server = kopf.WebhookAutoServer(port=9443)
+    settings.admission.server = kopf.WebhookServer(port=9443, host=_detect_host())
     settings.admission.managed = 'auto.kopf.dev'
 
 @kopf.on.mutate('pods', operations=['CREATE'], persistent=True)
@@ -731,9 +752,9 @@ deactivate 2>/dev/null
 | `status` 가 patch 해도 안 채워짐 | `subresources.status: {}` 가 없거나, 일반 patch 가 status 무시 — `--subresource=status` 사용 |
 | `kopf run` 이 `Unauthorized` | `~/.kube/config` 의 사용자가 CRD/리소스에 권한 없음 — `kubectl auth can-i create websites` 로 확인 |
 | Webhook 이 호출 안 됨 | `kopf` 는 자동으로 etcd 등록 + cert 생성 — `kubectl get validatingwebhookconfigurations` 로 등록 여부 확인 |
-| `Admission handlers exist, but no admission server/tunnel is configured` | kopf 1.44+ 부터 `@kopf.on.startup()` 에서 `settings.admission.server = kopf.WebhookAutoServer(port=9443)` + `settings.admission.managed = 'auto.kopf.dev'` 명시 필수 |
+| `Admission handlers exist, but no admission server/tunnel is configured` | kopf 1.44+ 부터 `@kopf.on.startup()` 에서 `settings.admission.server = kopf.WebhookServer(port=9443, host=...)` + `settings.admission.managed = 'auto.kopf.dev'` 명시 필수 |
 | `[Errno 98] address already in use ('0.0.0.0', <port>)` | `--liveness` 포트가 점유 중 — `ss -tlnp \| grep <port>` 로 점유자 확인 후 다른 포트(28080·38080 등) 지정 또는 옵션 자체 제거 |
-| `MissingDependencyError: Auto-guessing cluster types requires an extra dependency` | `pip install certvalidator` 한 줄로 해결 — `WebhookAutoServer` 의 host 자동 감지 의존성 |
+| `oscrypto.errors.LibraryNotFoundError: Error detecting the version of libcrypto` / `MissingDependencyError: Auto-guessing cluster types ...` | Ubuntu 24.04 의 OpenSSL 3.x 와 oscrypto 가 호환 안 됨 — `WebhookAutoServer` 대신 `WebhookServer(port=..., host=...)` 로 host 를 명시하면 certvalidator/oscrypto 호출 자체를 우회함 |
 | Webhook 거부했는데 Pod 가 생성됨 | `failurePolicy: Ignore` 또는 webhook server 다운 — `kopf run` 출력 확인 |
 | `kopf: command not found` | venv 활성화 필요 — `source ~/k8s-week13/venv/bin/activate` |
 | `ImportError: kubernetes` | `pip install kubernetes` 후에도 안 되면 venv 안에서 설치됐는지 확인 |
