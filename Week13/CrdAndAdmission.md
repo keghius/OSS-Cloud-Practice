@@ -28,6 +28,8 @@ python3 -m venv ~/k8s-week13/venv
 source ~/k8s-week13/venv/bin/activate
 pip install --upgrade pip
 pip install "kopf>=1.37" "kubernetes>=29" pyyaml
+# certvalidator: kopf 의 WebhookAutoServer 가 host 자동 감지에 필요 (Step 10/11 admission webhook)
+pip install certvalidator
 
 # 설치 확인
 kopf --version
@@ -731,6 +733,7 @@ deactivate 2>/dev/null
 | Webhook 이 호출 안 됨 | `kopf` 는 자동으로 etcd 등록 + cert 생성 — `kubectl get validatingwebhookconfigurations` 로 등록 여부 확인 |
 | `Admission handlers exist, but no admission server/tunnel is configured` | kopf 1.44+ 부터 `@kopf.on.startup()` 에서 `settings.admission.server = kopf.WebhookAutoServer(port=9443)` + `settings.admission.managed = 'auto.kopf.dev'` 명시 필수 |
 | `[Errno 98] address already in use ('0.0.0.0', <port>)` | `--liveness` 포트가 점유 중 — `ss -tlnp \| grep <port>` 로 점유자 확인 후 다른 포트(28080·38080 등) 지정 또는 옵션 자체 제거 |
+| `MissingDependencyError: Auto-guessing cluster types requires an extra dependency` | `pip install certvalidator` 한 줄로 해결 — `WebhookAutoServer` 의 host 자동 감지 의존성 |
 | Webhook 거부했는데 Pod 가 생성됨 | `failurePolicy: Ignore` 또는 webhook server 다운 — `kopf run` 출력 확인 |
 | `kopf: command not found` | venv 활성화 필요 — `source ~/k8s-week13/venv/bin/activate` |
 | `ImportError: kubernetes` | `pip install kubernetes` 후에도 안 되면 venv 안에서 설치됐는지 확인 |
