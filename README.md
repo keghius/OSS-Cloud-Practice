@@ -20,6 +20,6 @@
 | **10주차** | [쿠버네티스 네트워킹](./Week10/KubernetesNetworking.md) |
 | **11주차** | [쿠버네티스 스토리지](./Week11/KubernetesStorage.md) |
 | **12주차** | [서비스 메시 (Istio 중심)](./Week12/ServiceMesh.md) |
-| **13주차** | 쿠버네티스 및 워크로드 보안 |
+| **13주차** | [CRD & Admission Controller](./Week13/CrdAndAdmission.md) |
 | **14주차** | - |
 | **15주차** | **기말고사** |
