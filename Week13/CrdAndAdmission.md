@@ -27,7 +27,8 @@ sudo apt -y install python3-pip python3-venv
 python3 -m venv ~/k8s-week13/venv
 source ~/k8s-week13/venv/bin/activate
 pip install --upgrade pip
-pip install "kopf>=1.37" "kubernetes>=29" pyyaml
+pip install "kopf>=1.37" "kubernetes>=29" pyyaml cryptography
+# cryptography: Step 10·11 webhook 의 self-signed cert 생성용 (OpenSSL 3.x 호환)
 
 # 설치 확인
 kopf --version
@@ -578,6 +579,12 @@ kubectl -n tmp-ns run blocked --image=nginx 2>&1 | tail -3
 cat > validating_webhook.py << 'EOF'
 import kopf
 import socket
+import ipaddress
+from datetime import datetime, timedelta, timezone
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 ALLOWED_PREFIXES = ("nginx:", "docker.io/", "registry.k8s.io/")
 
@@ -590,16 +597,45 @@ def _detect_host():
     finally:
         s.close()
 
+def _generate_cert(host_ip):
+    """self-signed cert 생성 → webhook.crt / webhook.key 파일로 저장 + CA PEM 반환.
+    kopf 의 기본 cert 생성기(certbuilder)는 oscrypto 기반이라 OpenSSL 3.x 와 호환 안 되므로
+    cryptography 패키지로 직접 만들어 kopf 에 파일로 전달."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host_ip)])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name).issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(host_ip))]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    key_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    with open('webhook.crt', 'wb') as f: f.write(cert_pem)
+    with open('webhook.key', 'wb') as f: f.write(key_pem)
+    return cert_pem
+
 # kopf 1.44+ 부터 admission server 명시 설정 필수
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_):
-    # WebhookServer (host 명시) → certvalidator/oscrypto 의존성 우회
-    # Ubuntu 24.04 의 OpenSSL 3.x 와 oscrypto 가 호환 안 되어 WebhookAutoServer 가 실패
+    host = _detect_host()
+    cadata = _generate_cert(host)
     settings.admission.server = kopf.WebhookServer(
-        port=9443,
-        host=_detect_host(),
+        port=9443, host=host,
+        certfile='webhook.crt', pkeyfile='webhook.key',
+        cadata=cadata,    # kopf 가 ValidatingWebhookConfiguration.caBundle 에 자동 주입
     )
-    # ValidatingWebhookConfiguration 자동 등록·관리
     settings.admission.managed = 'auto.kopf.dev'
 
 # Pod 생성 시 자동 호출됨
@@ -664,6 +700,12 @@ EOF
 cat > webhooks_combined.py << 'EOF'
 import kopf
 import socket
+import ipaddress
+from datetime import datetime, timedelta, timezone
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 ALLOWED_PREFIXES = ("nginx:", "docker.io/", "registry.k8s.io/")
 
@@ -675,9 +717,41 @@ def _detect_host():
     finally:
         s.close()
 
+def _generate_cert(host_ip):
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host_ip)])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name).issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(host_ip))]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    key_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    with open('webhook.crt', 'wb') as f: f.write(cert_pem)
+    with open('webhook.key', 'wb') as f: f.write(key_pem)
+    return cert_pem
+
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_):
-    settings.admission.server = kopf.WebhookServer(port=9443, host=_detect_host())
+    host = _detect_host()
+    cadata = _generate_cert(host)
+    settings.admission.server = kopf.WebhookServer(
+        port=9443, host=host,
+        certfile='webhook.crt', pkeyfile='webhook.key',
+        cadata=cadata,
+    )
     settings.admission.managed = 'auto.kopf.dev'
 
 @kopf.on.mutate('pods', operations=['CREATE'], persistent=True)
@@ -754,7 +828,7 @@ deactivate 2>/dev/null
 | Webhook 이 호출 안 됨 | `kopf` 는 자동으로 etcd 등록 + cert 생성 — `kubectl get validatingwebhookconfigurations` 로 등록 여부 확인 |
 | `Admission handlers exist, but no admission server/tunnel is configured` | kopf 1.44+ 부터 `@kopf.on.startup()` 에서 `settings.admission.server = kopf.WebhookServer(port=9443, host=...)` + `settings.admission.managed = 'auto.kopf.dev'` 명시 필수 |
 | `[Errno 98] address already in use ('0.0.0.0', <port>)` | `--liveness` 포트가 점유 중 — `ss -tlnp \| grep <port>` 로 점유자 확인 후 다른 포트(28080·38080 등) 지정 또는 옵션 자체 제거 |
-| `oscrypto.errors.LibraryNotFoundError: Error detecting the version of libcrypto` / `MissingDependencyError: Auto-guessing cluster types ...` | Ubuntu 24.04 의 OpenSSL 3.x 와 oscrypto 가 호환 안 됨 — `WebhookAutoServer` 대신 `WebhookServer(port=..., host=...)` 로 host 를 명시하면 certvalidator/oscrypto 호출 자체를 우회함 |
+| `oscrypto.errors.LibraryNotFoundError` / `MissingDependencyError: certvalidator` / `MissingDependencyError: certbuilder` | Ubuntu 24.04 의 OpenSSL 3.x 와 oscrypto 가 호환 안 됨 — kopf 내장 cert 생성기 대신 `cryptography` 패키지로 직접 cert 만들고 `kopf.WebhookServer(certfile=..., pkeyfile=..., cadata=...)` 로 전달 |
 | Webhook 거부했는데 Pod 가 생성됨 | `failurePolicy: Ignore` 또는 webhook server 다운 — `kopf run` 출력 확인 |
 | `kopf: command not found` | venv 활성화 필요 — `source ~/k8s-week13/venv/bin/activate` |
 | `ImportError: kubernetes` | `pip install kubernetes` 후에도 안 되면 venv 안에서 설치됐는지 확인 |
