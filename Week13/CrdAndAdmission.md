@@ -33,6 +33,13 @@ pip install "kopf>=1.37" "kubernetes>=29" pyyaml
 kopf --version
 python -c "import kubernetes; print(kubernetes.__version__)"
 ```
+
+> 📌 **새 터미널을 열 때마다** `kopf` 나 `python` 명령을 실행할 거라면 venv 활성화가 필요합니다. `kubectl` 만 쓰는 터미널은 무관.
+> ```bash
+> cd ~/k8s-week13
+> source venv/bin/activate
+> ```
+> 본 실습 자료의 Step 6·7·10·11 의 `kopf run` / `python` 명령 앞에는 활성화 라인이 함께 적혀 있습니다.
 ![figure0-2](./images/figure0-2.png)
 
 ### 3. 전용 네임스페이스 생성
@@ -359,6 +366,7 @@ for event in w.stream(
           f"tier={obj.get('spec', {}).get('tier')}")
 EOF
 
+source venv/bin/activate     # 새 터미널이면 venv 활성화 필요
 python3 dynamic_watch.py &
 DYN_PID=$!
 sleep 2
@@ -446,6 +454,7 @@ EOF
 
 ```bash
 # 별도 터미널에서 실행 — Ctrl+C 로 종료
+source venv/bin/activate     # 새 터미널이면 venv 활성화 필요
 kopf run --namespace=crd-lab website_controller.py --verbose
 ```
 
@@ -591,6 +600,7 @@ EOF
 
 ```bash
 # 별도 터미널 — kopf 가 self-signed cert 생성 + ValidatingWebhookConfiguration 자동 등록
+source venv/bin/activate     # 새 터미널이면 venv 활성화 필요
 kopf run --namespace=crd-lab --standalone --liveness=http://0.0.0.0:8080/healthz \
   --verbose validating_webhook.py
 ```
@@ -646,6 +656,7 @@ def validate_image(spec, **_):
 EOF
 
 # kopf 실행
+source venv/bin/activate     # 새 터미널이면 venv 활성화 필요
 kopf run --namespace=crd-lab --standalone --verbose webhooks_combined.py
 ```
 
