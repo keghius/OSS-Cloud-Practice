@@ -580,7 +580,15 @@ import kopf
 
 ALLOWED_PREFIXES = ("nginx:", "docker.io/", "registry.k8s.io/")
 
-# Pod 생성/업데이트 시 자동 호출됨 (kopf 가 webhook 등록까지 처리)
+# kopf 1.44+ 부터 admission server 명시 설정 필수
+@kopf.on.startup()
+def configure(settings: kopf.OperatorSettings, **_):
+    # WebhookAutoServer 가 self-signed cert + master IP 자동 감지
+    settings.admission.server = kopf.WebhookAutoServer(port=9443)
+    # ValidatingWebhookConfiguration 자동 등록·관리
+    settings.admission.managed = 'auto.kopf.dev'
+
+# Pod 생성 시 자동 호출됨
 @kopf.on.validate('pods', operations=['CREATE'], persistent=True)
 def validate_image(spec, **_):
     containers = spec.get('containers', []) + spec.get('initContainers', [])
@@ -642,6 +650,11 @@ cat > webhooks_combined.py << 'EOF'
 import kopf
 
 ALLOWED_PREFIXES = ("nginx:", "docker.io/", "registry.k8s.io/")
+
+@kopf.on.startup()
+def configure(settings: kopf.OperatorSettings, **_):
+    settings.admission.server = kopf.WebhookAutoServer(port=9443)
+    settings.admission.managed = 'auto.kopf.dev'
 
 @kopf.on.mutate('pods', operations=['CREATE'], persistent=True)
 def inject_label(patch, **_):
@@ -715,6 +728,7 @@ deactivate 2>/dev/null
 | `status` 가 patch 해도 안 채워짐 | `subresources.status: {}` 가 없거나, 일반 patch 가 status 무시 — `--subresource=status` 사용 |
 | `kopf run` 이 `Unauthorized` | `~/.kube/config` 의 사용자가 CRD/리소스에 권한 없음 — `kubectl auth can-i create websites` 로 확인 |
 | Webhook 이 호출 안 됨 | `kopf` 는 자동으로 etcd 등록 + cert 생성 — `kubectl get validatingwebhookconfigurations` 로 등록 여부 확인 |
+| `Admission handlers exist, but no admission server/tunnel is configured` | kopf 1.44+ 부터 `@kopf.on.startup()` 에서 `settings.admission.server = kopf.WebhookAutoServer(port=9443)` + `settings.admission.managed = 'auto.kopf.dev'` 명시 필수 |
 | Webhook 거부했는데 Pod 가 생성됨 | `failurePolicy: Ignore` 또는 webhook server 다운 — `kopf run` 출력 확인 |
 | `kopf: command not found` | venv 활성화 필요 — `source ~/k8s-week13/venv/bin/activate` |
 | `ImportError: kubernetes` | `pip install kubernetes` 후에도 안 되면 venv 안에서 설치됐는지 확인 |
