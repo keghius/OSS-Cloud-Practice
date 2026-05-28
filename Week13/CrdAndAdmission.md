@@ -359,7 +359,7 @@ for event in w.stream(
           f"tier={obj.get('spec', {}).get('tier')}")
 EOF
 
-python dynamic_watch.py &
+python3 dynamic_watch.py &
 DYN_PID=$!
 sleep 2
 
